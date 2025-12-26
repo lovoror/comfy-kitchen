@@ -294,16 +294,6 @@ def get_cmdclass(has_extensions):
                     # This indicates the extension uses Python's Limited API
                     self.py_limited_api = "cp312"
 
-                    # Add CUDA version as local version identifier (e.g., 0.1.0+cu128)
-                    cuda_version = get_cuda_version()
-                    if cuda_version and self.distribution.metadata.version:
-                        cuda_tag = f"cu{cuda_version[0]}{cuda_version[1]}"
-                        base_version = self.distribution.metadata.version
-                        # Only add cuda_tag if not already present
-                        if '+' not in base_version:
-                            self.distribution.metadata.version = f"{base_version}+{cuda_tag}"
-                            print(f"Building wheel with CUDA {cuda_version[0]}.{cuda_version[1]} support: {self.distribution.metadata.version}")
-
         cmdclass["bdist_wheel"] = CUDABdistWheel
     except ImportError as e:
         print(f"Warning: Could not import wheel.bdist_wheel: {e}")

@@ -29,7 +29,8 @@ else()
 endif()
 
 # Find Python (required by nanobind - must use "Python" not "Python3")
-find_package(Python COMPONENTS Interpreter Development REQUIRED)
+# Only require Development.Module for extension modules, not full Development
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 
 # Find nanobind
 execute_process(

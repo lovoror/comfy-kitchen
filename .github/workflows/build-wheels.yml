@@ -14,14 +14,103 @@ permissions:
   contents: read
 
 jobs:
-  build_wheels:
-    name: Build wheel for ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, windows-2022]
-        python-version: ["3.12"]
+  build_wheels_linux:
+    name: Build Linux wheels
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Build CUDA wheel using cibuildwheel with manylinux container
+      - name: Build CUDA wheel (manylinux)
+        uses: pypa/cibuildwheel@v2.22.0
+        env:
+          # Use NVIDIA's CUDA devel image based on UBI8 (manylinux_2_28 compatible)
+          # CUDA 13.0 will be installed inside the container
+          CIBW_MANYLINUX_X86_64_IMAGE: quay.io/pypa/manylinux_2_28_x86_64
+
+          # Build only for Python 3.12 with stable ABI
+          CIBW_BUILD: "cp312-manylinux_x86_64"
+          CIBW_SKIP: "*-musllinux_*"
+
+          # Install CUDA 13.0 toolkit inside the container
+          CIBW_BEFORE_ALL_LINUX: |
+            # Install dnf plugins for config-manager command
+            dnf install -y dnf-plugins-core
+            # Add NVIDIA CUDA repository for RHEL 8
+            dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo
+            dnf clean all
+            # Install ONLY the minimal CUDA packages needed for compilation (not the full toolkit)
+            dnf install -y cuda-nvcc-13-0 cuda-cudart-devel-13-0 libcublas-devel-13-0 libnvjitlink-devel-13-0
+            # Install Python development headers (fallback for CMake FindPython)
+            dnf install -y python3-devel
+            # Verify CUDA installation
+            /usr/local/cuda-13.0/bin/nvcc --version
+
+          # Set CUDA environment and install build dependencies
+          CIBW_ENVIRONMENT_LINUX: >
+            CUDA_HOME=/usr/local/cuda-13.0
+            PATH=/usr/local/cuda-13.0/bin:$PATH
+            LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64:$LD_LIBRARY_PATH
+            LIBRARY_PATH=/usr/local/cuda-13.0/lib64/stubs:$LIBRARY_PATH
+
+          # Install Python build dependencies
+          CIBW_BEFORE_BUILD: "pip install nanobind cmake setuptools wheel"
+
+          # Repair wheel for manylinux compliance, excluding CUDA runtime libs
+          # Users must have CUDA installed on their system
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >
+            auditwheel repair -w {dest_dir} {wheel}
+            --exclude libcuda.so.1
+            --exclude libcudart.so.13
+            --exclude libnvrtc.so.13
+            --exclude libcublas.so.13
+            --exclude libcublasLt.so.13
+            --exclude libnvJitLink.so.13
+
+        with:
+          output-dir: wheelhouse
+
+      - name: Build CPU-only wheel (py3-none-any)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install build setuptools wheel
+          # Build CPU-only variant (pure Python, no CUDA)
+          python setup.py bdist_wheel --no-cuda
+          # Move to wheelhouse directory
+          mv dist/*py3-none-any.whl wheelhouse/
+
+      - name: List built wheels
+        shell: bash
+        run: |
+          ls -lh wheelhouse/
+          echo "Built wheels:"
+          ls -1 wheelhouse/*.whl
+
+      - name: Upload Linux CUDA wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-cuda
+          path: wheelhouse/*manylinux*.whl
+          if-no-files-found: error
+
+      - name: Upload CPU-only wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-cpu-only
+          path: wheelhouse/*py3-none-any.whl
+          if-no-files-found: error
+
+  build_wheels_windows:
+    name: Build Windows wheel
+    runs-on: windows-2022
 
     steps:
       - name: Checkout code
@@ -34,17 +123,9 @@ jobs:
           cuda: '13.0.2'
           method: 'network'
           use-github-cache: 'true'
-          log-file-suffix: '${{ matrix.os }}.txt'
+          log-file-suffix: 'windows-2022.txt'
 
-      - name: Set additional CUDA environment variables (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          echo "LD_LIBRARY_PATH=$CUDA_PATH/lib64:$CUDA_PATH/lib64/stubs:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=$CUDA_PATH/lib64:$CUDA_PATH/lib64/stubs:$LIBRARY_PATH" >> $GITHUB_ENV
-
-      - name: Set additional CUDA environment variables (Windows)
-        if: runner.os == 'Windows'
+      - name: Set additional CUDA environment variables
         shell: pwsh
         run: |
           echo "CUDA_PATH_V13_0=$env:CUDA_PATH" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -56,12 +137,10 @@ jobs:
           echo "CUDA_PATH: $CUDA_PATH"
           nvcc --version
 
-      - name: Setup MSVC (Windows)
-        if: runner.os == 'Windows'
+      - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Setup CUDA MSBuild integration (Windows)
-        if: runner.os == 'Windows'
+      - name: Setup CUDA MSBuild integration
         shell: pwsh
         run: |
           # Copy CUDA MSBuild integration files to Visual Studio directory
@@ -140,13 +219,12 @@ jobs:
           
           Write-Host "CUDA MSBuild integration configured successfully"
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
-      - name: Create python3.lib for stable ABI (Windows)
-        if: runner.os == 'Windows'
+      - name: Create python3.lib for stable ABI
         shell: pwsh
         run: |
           # Create python3.lib for stable ABI support
@@ -182,16 +260,6 @@ jobs:
           # Build with default platform-specific CUDA architectures from setup.py
           python setup.py bdist_wheel
 
-      - name: Build CPU-only wheel (Linux only - py3-none-any)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          # Clean build artifacts to avoid conflicts
-          rm -rf build *.egg-info
-          # Build CPU-only variant (pure Python, no CUDA)
-          # This produces a universal wheel that works on any platform
-          python setup.py bdist_wheel --no-cuda
-
       - name: List built wheels
         shell: bash
         run: |
@@ -199,36 +267,31 @@ jobs:
           echo "Built wheels:"
           ls -1 dist/*.whl
 
-      - name: Upload wheels
+      - name: Upload Windows wheel
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
+          name: wheels-windows-cuda
           path: dist/*.whl
           if-no-files-found: error
 
-  test:
-    name: Test on ${{ matrix.os }}
-    needs: build_wheels
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, windows-2022]
-        python-version: ["3.12"]
+  test_linux:
+    name: Test on Linux
+    needs: build_wheels_linux
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
-      - name: Download wheels
+      - name: Download CPU-only wheel
         uses: actions/download-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-py${{ matrix.python-version }}
+          name: wheels-cpu-only
           path: dist/
 
       - name: Install wheel and test dependencies
@@ -237,14 +300,50 @@ jobs:
           python -m pip install --upgrade pip
           # Install CPU-only PyTorch first (smaller download, no CUDA needed for CI)
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          # Install the CPU-only wheel on Linux, CUDA wheel on Windows
-          # (CPU wheel is py3-none-any, works everywhere without CUDA runtime)
-          if [ "$RUNNER_OS" == "Linux" ]; then
-            pip install dist/*py3-none-any.whl
-          else
-            # Windows: install the CUDA wheel (will work in CPU-only mode)
-            pip install dist/*.whl
-          fi
+          # Install the CPU-only wheel (py3-none-any works everywhere)
+          pip install dist/*py3-none-any.whl
+          pip install pytest ruff
+
+      - name: Ruff check
+        shell: bash
+        run: |
+          ruff check .
+
+      - name: Run tests
+        shell: bash
+        run: |
+          # Run all tests - conftest handles backend availability
+          # Tests requiring CUDA will be skipped on CPU-only runners
+          python -m pytest tests/ -v --tb=short
+
+  test_windows:
+    name: Test on Windows
+    needs: build_wheels_windows
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download Windows wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-windows-cuda
+          path: dist/
+
+      - name: Install wheel and test dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          # Install CPU-only PyTorch first (smaller download, no CUDA needed for CI)
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          # Windows: install the CUDA wheel (will work in CPU-only mode)
+          pip install dist/*.whl
           pip install pytest ruff
 
       - name: Ruff check
@@ -261,21 +360,34 @@ jobs:
 
   publish:
     name: Publish to PyPI
-    needs: [build_wheels, test]
+    needs: [build_wheels_linux, build_wheels_windows, test_linux, test_windows]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     environment: pypi
 
     steps:
-      - name: Download all wheel artifacts
+      - name: Download Linux CUDA wheel
         uses: actions/download-artifact@v4
         with:
-          pattern: wheels-*
+          name: wheels-linux-cuda
           path: dist/
-          merge-multiple: true
+
+      - name: Download Windows CUDA wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-windows-cuda
+          path: dist/
+
+      - name: Download CPU-only wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-cpu-only
+          path: dist/
 
       - name: List wheels to publish
-        run: ls -la dist/
+        run: |
+          echo "Wheels to publish:"
+          ls -la dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

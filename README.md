@@ -41,21 +41,30 @@ dq = qt.dequantize()
 
 ## Installation
 
+### From PyPI
+
+```bash
+# Install with CUDA support (Linux/Windows)
+pip install comfy-kitchen
+
+# Install CPU-only version (any platform)
+pip install comfy-kitchen --prefer-binary --only-binary=:none:
+```
+
 ### Package Variants
 
-Two package variants are available:
+Two wheel variants are published to PyPI:
 
-1. **`comfy-kitchen`** (default) - Full package with CUDA support
-   - Requires CUDA toolkit for compilation
-   - Single wheel for Python 3.12+ (Stable ABI)
+| Wheel | Platforms | Backends | Notes |
+|-------|-----------|----------|-------|
+| `comfy_kitchen-X.Y.Z-cp312-abi3-manylinux_2_28_x86_64.whl` | Linux x86_64 | eager, cuda, triton | Requires CUDA 13.0+ runtime |
+| `comfy_kitchen-X.Y.Z-cp312-abi3-win_amd64.whl` | Windows x64 | eager, cuda, triton | Requires CUDA 13.0+ runtime |
+| `comfy_kitchen-X.Y.Z-py3-none-any.whl` | Any | eager, triton | Pure Python, no CUDA required |
 
-2. **`comfy-kitchen-no-cuda`**
-   - Pure Python wheel (`py3-none-any`)
-   - Includes: eager and triton backends only
-   - No compilation required, works on any platform
+- **CUDA wheels** use Python's Stable ABI (`abi3`), so a single wheel works across Python 3.12, 3.13, 3.14+
+- **CPU-only wheel** is pure Python and works on any platform with Python 3.12+
 
-
-### Installation Options
+### From Source
 
 ```bash
 # Standard installation with CUDA support
@@ -64,25 +73,23 @@ pip install .
 # Development installation
 pip install -e ".[dev]"
 
-# For faster rebuilds during development:
-# Skip build isolation for faster rebuilds
+# For faster rebuilds during development (skip build isolation)
 pip install -e . --no-build-isolation -v
-
 ```
 
-#### Available Build Options
+#### Build Options
 
 These options require using `setup.py` directly (not `pip install`):
 
 | Option | Command | Description | Default |
 |--------|---------|-------------|---------|
-| `--no-cuda` | `python setup.py bdist_wheel --no-cuda` | Build without CUDA backend | Enabled (build with CUDA) |
-| `--cuda-archs=...` | `python setup.py build_ext --cuda-archs="80;89"` | CUDA architectures to build for | Windows: `80;89;120f`<br>Linux: `80;89;90a;100f;120f` |
+| `--no-cuda` | `python setup.py bdist_wheel --no-cuda` | Build CPU-only wheel (`py3-none-any`) | Enabled (build with CUDA) |
+| `--cuda-archs=...` | `python setup.py build_ext --cuda-archs="80;89"` | CUDA architectures to build for | `120f` (Linux), `80;89;120f` (Windows) |
 | `--debug-build` | `python setup.py build_ext --debug-build` | Build in debug mode with symbols | Disabled (Release) |
 | `--lineinfo` | `python setup.py build_ext --lineinfo` | Enable NVCC line info for profiling | Disabled |
 
 ```bash
-# Build without CUDA
+# Build CPU-only wheel (pure Python, no CUDA required)
 python setup.py bdist_wheel --no-cuda
 
 # Build with custom CUDA architectures
@@ -98,10 +105,11 @@ python setup.py build_ext --debug-build --lineinfo bdist_wheel
 
 - **Python**: ≥3.12 (uses Stable ABI - single wheel works across 3.12, 3.13, 3.14+)
 - **PyTorch**: ≥2.5.0
-- **CUDA Toolkit** (optional): ≥12.8 for CUDA backend
-  - Set `CUDA_HOME` environment variable if not auto-detected
-- **nanobind**: ≥2.0.0 (for building CUDA extension)
-- **CMake**: ≥3.18 (for building CUDA extension)
+- **CUDA Runtime** (for CUDA wheels): ≥13.0
+  - Pre-built wheels require CUDA 13.0+ drivers on the system
+  - Building from source requires CUDA Toolkit ≥12.8 and `CUDA_HOME` environment variable
+- **nanobind**: ≥2.0.0 (for building from source)
+- **CMake**: ≥3.18 (for building from source)
 
 ## Quick Start
 
