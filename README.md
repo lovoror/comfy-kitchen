@@ -1,4 +1,5 @@
 # Comfy Kitchen
+Support V100
 
 Fast kernel library for Diffusion inference with multiple compute backends.
 
