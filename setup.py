@@ -58,12 +58,20 @@ class CMakeBuildExt(build_ext):
     def finalize_options(self):
         super().finalize_options()
 
-        # Apply platform-specific default for CUDA architectures if not specified
+        # Apply CUDA architectures with priority:
+        # 1. Command-line --cuda-archs=...
+        # 2. Environment variable COMFY_CUDA_ARCHS
+        # 3. Platform-specific default
         if self.cuda_archs is None:
-            self.cuda_archs = (
-                self.DEFAULT_CUDA_ARCHS_WINDOWS if os.name == "nt"
-                else self.DEFAULT_CUDA_ARCHS_LINUX
-            )
+            env_archs = os.environ.get("COMFY_CUDA_ARCHS")
+            if env_archs:
+                self.cuda_archs = env_archs
+                print(f"Using CUDA architectures from COMFY_CUDA_ARCHS env: {env_archs}")
+            else:
+                self.cuda_archs = (
+                    self.DEFAULT_CUDA_ARCHS_WINDOWS if os.name == "nt"
+                    else self.DEFAULT_CUDA_ARCHS_LINUX
+                )
 
 
     def run(self):

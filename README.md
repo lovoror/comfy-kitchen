@@ -1,5 +1,5 @@
 # Comfy Kitchen
-Support V100
+Support V100 using eager
 
 Fast kernel library for Diffusion inference with multiple compute backends.
 
