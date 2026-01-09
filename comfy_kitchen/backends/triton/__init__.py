@@ -10,17 +10,38 @@ __all__ = [
 # Try to import triton and register if available
 _TRITON_AVAILABLE = True
 _TRITON_ERROR = None
+_IS_LEGACY_GPU = False
 
 try:
     import triton  # noqa: F401
+    import torch
 
+    # Check if this is a legacy GPU (SM < 8.9, no native FP8 support)
+    if torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(torch.cuda.current_device())
+        _IS_LEGACY_GPU = (props.major, props.minor) < (8, 9)
+
+    # Import standard implementations
     from .quantization import (
         dequantize_nvfp4,
-        dequantize_per_tensor_fp8,
         quantize_nvfp4,
-        quantize_per_tensor_fp8,
     )
     from .rope import apply_rope, apply_rope1
+    
+    # Import FP8 operations - use legacy or standard based on GPU
+    if _IS_LEGACY_GPU:
+        # Use optimized legacy kernels for V100/T600/RTX 30 series
+        from .legacy import (
+            quantize_per_tensor_fp8_legacy as quantize_per_tensor_fp8,
+            dequantize_per_tensor_fp8_legacy as dequantize_per_tensor_fp8,
+        )
+    else:
+        # Use standard kernels for modern GPUs
+        from .quantization import (
+            dequantize_per_tensor_fp8,
+            quantize_per_tensor_fp8,
+        )
+
 except ImportError as e:
     _TRITON_AVAILABLE = False
     _TRITON_ERROR = f"ImportError: {e!s}"
@@ -38,7 +59,8 @@ def _build_constraints() -> dict:
     cuda_devices = frozenset({"cuda"})
     standard_floats = frozenset({torch.float32, torch.float16, torch.bfloat16})
 
-    return {
+    constraints = {
+        # FP8 quantize/dequantize work on all CUDA GPUs (using legacy kernels if needed)
         "quantize_per_tensor_fp8": FunctionConstraints(
             params={
                 "x": ParamConstraint(dtypes=standard_floats),
@@ -48,6 +70,7 @@ def _build_constraints() -> dict:
                 ),
             },
             default_devices=cuda_devices,
+            # No min_compute_capability - legacy kernels support all CUDA GPUs
         ),
         "dequantize_per_tensor_fp8": FunctionConstraints(
             params={
@@ -58,7 +81,9 @@ def _build_constraints() -> dict:
                 "output_type": ParamConstraint(dtypes=standard_floats),
             },
             default_devices=cuda_devices,
+            # No min_compute_capability - legacy kernels support all CUDA GPUs
         ),
+        # NVFP4 quantize uses SM100 PTX instructions
         "quantize_nvfp4": FunctionConstraints(
             params={
                 "x": ParamConstraint(
@@ -68,6 +93,7 @@ def _build_constraints() -> dict:
                 "per_tensor_scale": ParamConstraint(dtypes=frozenset({torch.float32})),
             },
             default_devices=cuda_devices,
+            min_compute_capability=(10, 0),  # SM100 required for cvt.rn.satfinite.e2m1x2.f32
         ),
         # Uses inline PTX: cvt.rn.f16x2.e2m1x2 (SM100/Blackwell instruction)
         "dequantize_nvfp4": FunctionConstraints(
@@ -102,6 +128,8 @@ def _build_constraints() -> dict:
         ),
     }
 
+    return constraints
+
 
 def _register():
     import torch
@@ -124,4 +152,3 @@ def _register():
 
 
 _register()
-
